@@ -12,6 +12,9 @@ SERVERS = [
 healthy_servers = {server: True for server in SERVERS}
 iterator_index = 0
 
+# ADDED: A lock to prevent threads from reading/writing at the same time
+state_lock = threading.Lock()
+
 def health_check_loop():
     while True:
         time.sleep(5)
@@ -19,13 +22,15 @@ def health_check_loop():
             try:
                 response = requests.get(server, timeout=2)
                 if response.status_code == 200:
-                    if server not in healthy_servers:
-                        healthy_servers[server] = True
-                        print(f"[Health] {server} is back UP")
+                    with state_lock:
+                        if server not in healthy_servers:
+                            healthy_servers[server] = True
+                            print(f"[Health] {server} is back UP")
             except requests.exceptions.RequestException:
-                if server in healthy_servers:
-                    del healthy_servers[server]
-                    print(f"[Health] {server} went DOWN")
+                with state_lock:
+                    if server in healthy_servers:
+                        del healthy_servers[server]
+                        print(f"[Health] {server} went DOWN")
 
 health_thread = threading.Thread(target=health_check_loop, daemon=True)
 health_thread.start()
@@ -35,13 +40,15 @@ class LoadBalancerHandler(BaseHTTPRequestHandler):
     def get_next_server(self):
         global iterator_index
         
-        available_servers = [s for s in healthy_servers.keys()]
-        
-        if not available_servers:
-            return None
+        # ADDED: Lock the dictionary before iterating over it
+        with state_lock:
+            available_servers = [s for s in healthy_servers.keys()]
             
-        iterator_index = (iterator_index + 1) % len(available_servers)
-        return available_servers[iterator_index]
+            if not available_servers:
+                return None
+                
+            iterator_index = (iterator_index + 1) % len(available_servers)
+            return available_servers[iterator_index]
 
     def do_GET(self):
         backend_url = self.get_next_server()
