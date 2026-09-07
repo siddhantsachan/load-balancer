@@ -1,7 +1,6 @@
-import time
-import threading
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-import requests
+import asyncio
+from aiohttp import web
+import aiohttp
 
 SERVERS = [
     "http://localhost:8081",
@@ -9,68 +8,73 @@ SERVERS = [
     "http://localhost:8083"
 ]
 
+# Using asyncio.Lock to protect shared state in the event loop
+state_lock = asyncio.Lock()
 healthy_servers = {server: True for server in SERVERS}
 iterator_index = 0
 
-# ADDED: A lock to prevent threads from reading/writing at the same time
-state_lock = threading.Lock()
-
-def health_check_loop():
+async def health_check_loop(app):
+    """Background task to ping backend servers."""
     while True:
-        time.sleep(5)
-        for server in SERVERS:
-            try:
-                response = requests.get(server, timeout=2)
-                if response.status_code == 200:
-                    with state_lock:
-                        if server not in healthy_servers:
-                            healthy_servers[server] = True
-                            print(f"[Health] {server} is back UP")
-            except requests.exceptions.RequestException:
-                with state_lock:
-                    if server in healthy_servers:
-                        del healthy_servers[server]
-                        print(f"[Health] {server} went DOWN")
-
-health_thread = threading.Thread(target=health_check_loop, daemon=True)
-health_thread.start()
-
-
-class LoadBalancerHandler(BaseHTTPRequestHandler):
-    def get_next_server(self):
-        global iterator_index
+        await asyncio.sleep(5)
         
-        # ADDED: Lock the dictionary before iterating over it
-        with state_lock:
-            available_servers = [s for s in healthy_servers.keys()]
-            
-            if not available_servers:
-                return None
-                
-            iterator_index = (iterator_index + 1) % len(available_servers)
-            return available_servers[iterator_index]
+        # We need a new session just for health checks
+        async with aiohttp.ClientSession() as session:
+            for server in SERVERS:
+                try:
+                    async with session.get(server, timeout=2) as response:
+                        if response.status == 200:
+                            async with state_lock:
+                                if server not in healthy_servers:
+                                    healthy_servers[server] = True
+                                    print(f"[Health] {server} is back UP")
+                except (aiohttp.ClientError, asyncio.TimeoutError):
+                    async with state_lock:
+                        if server in healthy_servers:
+                            del healthy_servers[server]
+                            print(f"[Health] {server} went DOWN")
 
-    def do_GET(self):
-        backend_url = self.get_next_server()
-        if not backend_url:
-            self.send_error(503, "No healthy backend servers available")
-            return
-            
-        print(f"Routing request to: {backend_url}")
+async def get_next_server():
+    global iterator_index
+    async with state_lock:
+        available_servers = [s for s in healthy_servers.keys()]
+        if not available_servers:
+            return None
+        iterator_index = (iterator_index + 1) % len(available_servers)
+        return available_servers[iterator_index]
+
+async def handle_request(request):
+    backend_url = await get_next_server()
+    if not backend_url:
+        return web.Response(status=503, text="No healthy backend servers available")
         
-        try:
-            response = requests.get(f"{backend_url}{self.path}", timeout=3)
-            self.send_response(response.status_code)
-            for key, value in response.headers.items():
-                if key.lower() not in ['server', 'date', 'transfer-encoding', 'connection']:
-                    self.send_header(key, value)
-            self.end_headers()
-            self.wfile.write(response.content)
-        except requests.exceptions.RequestException:
-            self.send_error(502, "Bad Gateway")
+    print(f"Routing request to: {backend_url}")
+    
+    # INTENTIONAL BUG for tomorrow: Creating a new session per request leaks memory!
+    session = aiohttp.ClientSession()
+    
+    try:
+        async with session.get(f"{backend_url}{request.path}", timeout=3) as backend_resp:
+            body = await backend_resp.read()
+            # We don't close the session here! Memory leak!
+            return web.Response(body=body, status=backend_resp.status)
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        return web.Response(status=502, text="Bad Gateway")
+
+async def start_background_tasks(app):
+    app['health_check'] = asyncio.create_task(health_check_loop(app))
+
+async def cleanup_background_tasks(app):
+    app['health_check'].cancel()
+    await app['health_check']
 
 if __name__ == "__main__":
-    port = 8080
-    server = ThreadingHTTPServer(("localhost", port), LoadBalancerHandler)
-    print(f"Starting multithreaded load balancer on port {port}...")
-    server.serve_forever()
+    app = web.Application()
+    app.router.add_route('*', '/{tail:.*}', handle_request)
+    
+    # Register background tasks
+    app.on_startup.append(start_background_tasks)
+    app.on_cleanup.append(cleanup_background_tasks)
+    
+    print("Starting asyncio load balancer on port 8080...")
+    web.run_app(app, port=8080)
