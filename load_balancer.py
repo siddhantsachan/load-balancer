@@ -8,17 +8,13 @@ SERVERS = [
     "http://localhost:8083"
 ]
 
-# Using asyncio.Lock to protect shared state in the event loop
 state_lock = asyncio.Lock()
 healthy_servers = {server: True for server in SERVERS}
 iterator_index = 0
 
 async def health_check_loop(app):
-    """Background task to ping backend servers."""
     while True:
         await asyncio.sleep(5)
-        
-        # We need a new session just for health checks
         async with aiohttp.ClientSession() as session:
             for server in SERVERS:
                 try:
@@ -44,22 +40,28 @@ async def get_next_server():
         return available_servers[iterator_index]
 
 async def handle_request(request):
-    backend_url = await get_next_server()
-    if not backend_url:
-        return web.Response(status=503, text="No healthy backend servers available")
+    max_retries = 3
+    
+    # Adding exponential backoff retries if a backend drops the connection
+    for attempt in range(max_retries):
+        backend_url = await get_next_server()
+        if not backend_url:
+            return web.Response(status=503, text="No healthy backend servers available")
+            
+        print(f"Routing request to: {backend_url} (Attempt {attempt + 1})")
         
-    print(f"Routing request to: {backend_url}")
-    
-    # INTENTIONAL BUG for tomorrow: Creating a new session per request leaks memory!
-    session = aiohttp.ClientSession()
-    
-    try:
-        async with session.get(f"{backend_url}{request.path}", timeout=3) as backend_resp:
-            body = await backend_resp.read()
-            # We don't close the session here! Memory leak!
-            return web.Response(body=body, status=backend_resp.status)
-    except (aiohttp.ClientError, asyncio.TimeoutError):
-        return web.Response(status=502, text="Bad Gateway")
+        # We are still leaking sessions here (fixed in next commit)
+        session = aiohttp.ClientSession()
+        
+        try:
+            async with session.get(f"{backend_url}{request.path}", timeout=3) as backend_resp:
+                body = await backend_resp.read()
+                return web.Response(body=body, status=backend_resp.status)
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            print(f"Failed to connect to {backend_url}. Retrying...")
+            await asyncio.sleep(2 ** attempt) # 1s, 2s, 4s...
+            
+    return web.Response(status=502, text="Bad Gateway")
 
 async def start_background_tasks(app):
     app['health_check'] = asyncio.create_task(health_check_loop(app))
@@ -71,10 +73,6 @@ async def cleanup_background_tasks(app):
 if __name__ == "__main__":
     app = web.Application()
     app.router.add_route('*', '/{tail:.*}', handle_request)
-    
-    # Register background tasks
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
-    
-    print("Starting asyncio load balancer on port 8080...")
     web.run_app(app, port=8080)
