@@ -13,22 +13,22 @@ healthy_servers = {server: True for server in SERVERS}
 iterator_index = 0
 
 async def health_check_loop(app):
+    session = app['session']
     while True:
         await asyncio.sleep(5)
-        async with aiohttp.ClientSession() as session:
-            for server in SERVERS:
-                try:
-                    async with session.get(server, timeout=2) as response:
-                        if response.status == 200:
-                            async with state_lock:
-                                if server not in healthy_servers:
-                                    healthy_servers[server] = True
-                                    print(f"[Health] {server} is back UP")
-                except (aiohttp.ClientError, asyncio.TimeoutError):
-                    async with state_lock:
-                        if server in healthy_servers:
-                            del healthy_servers[server]
-                            print(f"[Health] {server} went DOWN")
+        for server in SERVERS:
+            try:
+                async with session.get(server, timeout=2) as response:
+                    if response.status == 200:
+                        async with state_lock:
+                            if server not in healthy_servers:
+                                healthy_servers[server] = True
+                                print(f"[Health] {server} is back UP")
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                async with state_lock:
+                    if server in healthy_servers:
+                        del healthy_servers[server]
+                        print(f"[Health] {server} went DOWN")
 
 async def get_next_server():
     global iterator_index
@@ -42,7 +42,9 @@ async def get_next_server():
 async def handle_request(request):
     max_retries = 3
     
-    # Adding exponential backoff retries if a backend drops the connection
+    # FIX: Use the single global session instead of creating one per request
+    session = request.app['session']
+    
     for attempt in range(max_retries):
         backend_url = await get_next_server()
         if not backend_url:
@@ -50,29 +52,33 @@ async def handle_request(request):
             
         print(f"Routing request to: {backend_url} (Attempt {attempt + 1})")
         
-        # We are still leaking sessions here (fixed in next commit)
-        session = aiohttp.ClientSession()
-        
         try:
             async with session.get(f"{backend_url}{request.path}", timeout=3) as backend_resp:
                 body = await backend_resp.read()
                 return web.Response(body=body, status=backend_resp.status)
         except (aiohttp.ClientError, asyncio.TimeoutError):
             print(f"Failed to connect to {backend_url}. Retrying...")
-            await asyncio.sleep(2 ** attempt) # 1s, 2s, 4s...
+            await asyncio.sleep(2 ** attempt)
             
     return web.Response(status=502, text="Bad Gateway")
 
-async def start_background_tasks(app):
+async def on_startup(app):
+    # Create ONE session for the entire application lifecycle
+    app['session'] = aiohttp.ClientSession()
     app['health_check'] = asyncio.create_task(health_check_loop(app))
 
-async def cleanup_background_tasks(app):
+async def on_cleanup(app):
     app['health_check'].cancel()
     await app['health_check']
+    # Cleanly close the session on shutdown
+    await app['session'].close()
 
 if __name__ == "__main__":
     app = web.Application()
     app.router.add_route('*', '/{tail:.*}', handle_request)
-    app.on_startup.append(start_background_tasks)
-    app.on_cleanup.append(cleanup_background_tasks)
+    
+    # Register lifecycle hooks
+    app.on_startup.append(on_startup)
+    app.on_cleanup.append(on_cleanup)
+    
     web.run_app(app, port=8080)
