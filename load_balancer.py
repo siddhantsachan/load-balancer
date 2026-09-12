@@ -85,7 +85,26 @@ async def on_cleanup(app):
 
 if __name__ == "__main__":
     app = web.Application()
+    app.router.add_post('/admin/servers', add_server)
+    app.router.add_delete('/admin/servers', remove_server)
     app.router.add_route('*', '/{tail:.*}', handle_request)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     web.run_app(app, port=8080)
+
+# --- ADMIN API ---
+async def add_server(request):
+    data = await request.json()
+    url = data.get("url")
+    if not url: return web.Response(status=400, text="url required")
+    async with state_lock:
+        if url not in SERVER_REGISTRY:
+            SERVER_REGISTRY[url] = {"weight": 1, "active_connections": 0, "healthy": True}
+    return web.json_response({"status": "added", "url": url})
+
+async def remove_server(request):
+    url = request.query.get("url")
+    async with state_lock:
+        if url in SERVER_REGISTRY:
+            del SERVER_REGISTRY[url]
+    return web.json_response({"status": "removed", "url": url})
