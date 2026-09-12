@@ -10,7 +10,13 @@ SERVER_REGISTRY = {
 }
 state_lock = asyncio.Lock()
 
+import hashlib
 class RoutingAlgorithms:
+    def consistent_hashing(self, available_servers, client_ip):
+        if not client_ip: client_ip = "unknown"
+        hash_val = int(hashlib.md5(client_ip.encode()).hexdigest(), 16)
+        return available_servers[hash_val % len(available_servers)]
+
     def __init__(self):
         self.rr_index = 0
 
@@ -23,7 +29,7 @@ class RoutingAlgorithms:
         return min(available_servers, key=lambda s: SERVER_REGISTRY[s]["active_connections"])
 
 router = RoutingAlgorithms()
-CURRENT_ALGO = "least_connections"
+CURRENT_ALGO = "consistent_hashing"
 
 async def health_check_loop(app):
     session = app['session']
@@ -40,15 +46,16 @@ async def health_check_loop(app):
                     if SERVER_REGISTRY[server]["healthy"]:
                         SERVER_REGISTRY[server]["healthy"] = False
 
-async def get_next_server():
+async def get_next_server(client_ip):
     async with state_lock:
         available = [s for s, data in SERVER_REGISTRY.items() if data["healthy"]]
         if not available: return None
         if CURRENT_ALGO == "least_connections": return router.least_connections(available)
+        if CURRENT_ALGO == "consistent_hashing": return router.consistent_hashing(available, client_ip)
         return router.round_robin(available)
 
 async def handle_request(request):
-    backend_url = await get_next_server()
+    backend_url = await get_next_server(request.remote)
     if not backend_url:
         return web.Response(status=503, text="No healthy backend servers available")
         
