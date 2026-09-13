@@ -67,13 +67,13 @@ async def handle_request(request):
     try:
         async with session.get(f"{backend_url}{request.path}", timeout=3) as backend_resp:
             body = await backend_resp.read()
-            # INTENTIONAL BUG: Decrement only happens on success!
-            async with state_lock:
-                SERVER_REGISTRY[backend_url]["active_connections"] -= 1
             return web.Response(body=body, status=backend_resp.status)
     except (aiohttp.ClientError, asyncio.TimeoutError):
-        # We forgot to decrement active_connections on error!
         return web.Response(status=502, text="Bad Gateway")
+    finally:
+        # BUG FIXED: Decrement connection count NO MATTER WHAT
+        async with state_lock:
+            SERVER_REGISTRY[backend_url]["active_connections"] -= 1
 
 async def on_startup(app):
     app['session'] = aiohttp.ClientSession()
