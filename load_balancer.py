@@ -84,7 +84,7 @@ async def on_cleanup(app):
     await app['session'].close()
 
 if __name__ == "__main__":
-    app = web.Application()
+    app = web.Application(middlewares=[rate_limiter])
     app.router.add_post('/admin/servers', add_server)
     app.router.add_delete('/admin/servers', remove_server)
     app.router.add_route('*', '/{tail:.*}', handle_request)
@@ -108,3 +108,28 @@ async def remove_server(request):
         if url in SERVER_REGISTRY:
             del SERVER_REGISTRY[url]
     return web.json_response({"status": "removed", "url": url})
+
+# --- RATE LIMITING MIDDLEWARE ---
+import time
+RATE_LIMIT_DB = {} # IP -> [tokens, last_refill]
+
+@web.middleware
+async def rate_limiter(request, handler):
+    if request.path.startswith("/admin"): return await handler(request)
+    
+    ip = request.remote or "unknown"
+    now = time.time()
+    
+    if ip not in RATE_LIMIT_DB:
+        RATE_LIMIT_DB[ip] = [10, now] # 10 tokens max
+    else:
+        tokens, last_refill = RATE_LIMIT_DB[ip]
+        elapsed = now - last_refill
+        RATE_LIMIT_DB[ip][0] = min(10, tokens + elapsed)
+        RATE_LIMIT_DB[ip][1] = now
+        
+    if RATE_LIMIT_DB[ip][0] < 1:
+        return web.Response(status=429, text="Too Many Requests")
+        
+    RATE_LIMIT_DB[ip][0] -= 1
+    return await handler(request)
