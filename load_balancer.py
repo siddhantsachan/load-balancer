@@ -4,9 +4,9 @@ import aiohttp
 
 # REFACTOR: Deleted hardcoded SERVERS list. Replaced with complex registry tracking state.
 SERVER_REGISTRY = {
-    "http://localhost:8081": {"weight": 1, "active_connections": 0, "healthy": True},
-    "http://localhost:8082": {"weight": 2, "active_connections": 0, "healthy": True},
-    "http://localhost:8083": {"weight": 1, "active_connections": 0, "healthy": True}
+    "http://localhost:8081": {"weight": 1, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0},
+    "http://localhost:8082": {"weight": 2, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0},
+    "http://localhost:8083": {"weight": 1, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0}
 }
 state_lock = asyncio.Lock()
 
@@ -48,7 +48,16 @@ async def health_check_loop(app):
 
 async def get_next_server(client_ip):
     async with state_lock:
-        available = [s for s, data in SERVER_REGISTRY.items() if data["healthy"]]
+        available = []
+        now = time.time()
+        for s, data in SERVER_REGISTRY.items():
+            if not data["healthy"]: continue
+            if data["state"] == "OPEN":
+                if now > data["retry_at"]:
+                    data["state"] = "HALF_OPEN"
+                else:
+                    continue
+            available.append(s)
         if not available: return None
         if CURRENT_ALGO == "least_connections": return router.least_connections(available)
         if CURRENT_ALGO == "consistent_hashing": return router.consistent_hashing(available, client_ip)
@@ -69,7 +78,19 @@ async def handle_request(request):
             body = await backend_resp.read()
             return web.Response(body=body, status=backend_resp.status)
     except (aiohttp.ClientError, asyncio.TimeoutError):
+        async with state_lock:
+            reg = SERVER_REGISTRY[backend_url]
+            reg["failures"] += 1
+            if reg["failures"] >= 3 and reg["state"] == "CLOSED":
+                reg["state"] = "OPEN"
+                reg["retry_at"] = time.time() + 10
         return web.Response(status=502, text="Bad Gateway")
+    else:
+        async with state_lock:
+            reg = SERVER_REGISTRY[backend_url]
+            if reg["state"] == "HALF_OPEN":
+                reg["state"] = "CLOSED"
+                reg["failures"] = 0
     finally:
         # BUG FIXED: Decrement connection count NO MATTER WHAT
         async with state_lock:
@@ -99,7 +120,7 @@ async def add_server(request):
     if not url: return web.Response(status=400, text="url required")
     async with state_lock:
         if url not in SERVER_REGISTRY:
-            SERVER_REGISTRY[url] = {"weight": 1, "active_connections": 0, "healthy": True}
+            SERVER_REGISTRY[url] = {"weight": 1, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0}
     return web.json_response({"status": "added", "url": url})
 
 async def remove_server(request):
