@@ -84,7 +84,7 @@ async def on_cleanup(app):
     await app['session'].close()
 
 if __name__ == "__main__":
-    app = web.Application(middlewares=[rate_limiter])
+    app = web.Application(middlewares=[rate_limiter, api_key_auth])
     app.router.add_post('/admin/servers', add_server)
     app.router.add_delete('/admin/servers', remove_server)
     app.router.add_route('*', '/{tail:.*}', handle_request)
@@ -111,7 +111,15 @@ async def remove_server(request):
 
 # --- RATE LIMITING MIDDLEWARE ---
 import time
-RATE_LIMIT_DB = {} # IP -> [tokens, last_refill]
+RATE_LIMIT_DB = {}
+
+@web.middleware
+async def api_key_auth(request, handler):
+    if request.path.startswith("/admin"):
+        if request.headers.get("X-API-Key") != "secret-key":
+            return web.Response(status=401, text="Unauthorized")
+    return await handler(request)
+ # IP -> [tokens, last_refill]
 
 @web.middleware
 async def rate_limiter(request, handler):
