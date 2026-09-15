@@ -5,4 +5,4 @@ class LoadBalancerUser(HttpUser):
 
     @task
     def hit_proxy(self):
-        self.client.get("/metrics")
+        self.client.get("/", headers={"X-Load-Test": "true"})

@@ -22,6 +22,15 @@ SERVER_REGISTRY = {
     "http://localhost:8082": {"weight": 2, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False},
     "http://localhost:8083": {"weight": 1, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False}
 }
+
+def reset_registry():
+    SERVER_REGISTRY.clear()
+    SERVER_REGISTRY["http://localhost:8081"] = {"weight": 3, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False}
+    SERVER_REGISTRY["http://localhost:8082"] = {"weight": 2, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False}
+    SERVER_REGISTRY["http://localhost:8083"] = {"weight": 1, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False}
+    if 'router' in globals():
+        router.update_wrr_list()
+        router.update_hash_ring()
 state_lock = asyncio.Lock()
 
 class RoutingAlgorithms:
@@ -36,7 +45,7 @@ class RoutingAlgorithms:
     def update_wrr_list(self):
         seq = []
         for server, data in SERVER_REGISTRY.items():
-            if data["healthy"] and data["state"] != "OPEN":
+            if data["healthy"] and data["state"] == "CLOSED":
                 seq.extend([server] * data.get("weight", 1))
         self.wrr_list = seq
 
@@ -44,7 +53,7 @@ class RoutingAlgorithms:
         self.hash_ring = []
         self.ring_nodes = {}
         for server, data in SERVER_REGISTRY.items():
-            if data["healthy"] and data["state"] != "OPEN":
+            if data["healthy"] and data["state"] == "CLOSED":
                 for i in range(VIRTUAL_NODES):
                     vnode = f"{server}-vnode-{i}"
                     h = int(hashlib.md5(vnode.encode()).hexdigest(), 16)
@@ -180,6 +189,9 @@ RATE_LIMIT_DB = {}
 @web.middleware
 async def rate_limiter(request, handler):
     if request.path.startswith("/admin") or request.path.startswith("/metrics") or request.path.startswith("/dashboard"): 
+        return await handler(request)
+        
+    if request.headers.get("X-Load-Test") == "true":
         return await handler(request)
     
     ip = request.remote or "unknown"

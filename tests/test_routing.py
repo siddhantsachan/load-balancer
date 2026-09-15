@@ -1,15 +1,10 @@
 import pytest
 import time
-from load_balancer import RoutingAlgorithms, SERVER_REGISTRY
+from load_balancer import RoutingAlgorithms, SERVER_REGISTRY, reset_registry
 
 @pytest.fixture(autouse=True)
 def reset_state():
-    for server in SERVER_REGISTRY:
-        SERVER_REGISTRY[server]["healthy"] = True
-        SERVER_REGISTRY[server]["state"] = "CLOSED"
-        SERVER_REGISTRY[server]["failures"] = 0
-        SERVER_REGISTRY[server]["active_connections"] = 0
-        SERVER_REGISTRY[server]["is_testing"] = False
+    reset_registry()
 
 def test_weighted_round_robin():
     router = RoutingAlgorithms()

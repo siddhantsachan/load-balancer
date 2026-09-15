@@ -40,11 +40,11 @@ Navigate to `http://localhost:8080/dashboard`.
 
 Using Locust to stress test the proxy, the asynchronous architecture comfortably achieves:
 
-* **Throughput**: ~142 Requests Per Second (RPS)
-* **Latency**: 2ms average response time
-* **99th Percentile**: 10ms response time
+* **Throughput**: ~100 Requests Per Second (RPS)
+* **Median Latency**: 19ms
+* **99th Percentile**: 270ms
 
-*(Tested with 50 concurrent users locally)*
+*(Tested with 50 concurrent users locally proxying active HTTP traffic to 3 backend nodes)*
 
 ## Architecture & Algorithms
 

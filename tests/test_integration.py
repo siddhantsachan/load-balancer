@@ -4,7 +4,8 @@ from load_balancer import (
     rate_limiter, api_key_auth, metrics, add_server, 
     handle_request, on_startup, on_cleanup, 
     SERVER_REGISTRY, RATE_LIMIT_DB,
-    MAX_FAILURES, RATE_LIMIT_CAPACITY, ADMIN_API_KEY
+    MAX_FAILURES, RATE_LIMIT_CAPACITY, ADMIN_API_KEY,
+    reset_registry
 )
 import time
 
@@ -21,11 +22,7 @@ async def cli(aiohttp_client):
     app.on_cleanup.append(on_cleanup)
     
     RATE_LIMIT_DB.clear()
-    for server in SERVER_REGISTRY:
-        SERVER_REGISTRY[server].update({
-            "failures": 0, "state": "CLOSED", "retry_at": 0, 
-            "is_testing": False, "healthy": True
-        })
+    reset_registry()
         
     return await aiohttp_client(app)
 
@@ -61,6 +58,9 @@ async def test_circuit_breaker_integration(cli):
     SERVER_REGISTRY["http://localhost:9991"] = {"weight": 1, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False}
     SERVER_REGISTRY["http://localhost:9992"] = {"weight": 1, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False}
     SERVER_REGISTRY["http://localhost:9993"] = {"weight": 1, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False}
+    from load_balancer import router
+    router.update_wrr_list()
+    router.update_hash_ring()
     
     # We have 3 servers. Each needs MAX_FAILURES to open.
     for _ in range(3 * MAX_FAILURES):
@@ -79,6 +79,9 @@ async def test_half_open_isolation(cli):
     SERVER_REGISTRY["http://localhost:9991"] = {"weight": 1, "active_connections": 0, "healthy": True, "failures": MAX_FAILURES, "state": "OPEN", "retry_at": time.time() - 10, "is_testing": False}
     SERVER_REGISTRY["http://localhost:9992"] = {"weight": 1, "active_connections": 0, "healthy": True, "failures": MAX_FAILURES, "state": "OPEN", "retry_at": time.time() + 100, "is_testing": False}
     SERVER_REGISTRY["http://localhost:9993"] = {"weight": 1, "active_connections": 0, "healthy": True, "failures": MAX_FAILURES, "state": "OPEN", "retry_at": time.time() + 100, "is_testing": False}
+    from load_balancer import router
+    router.update_wrr_list()
+    router.update_hash_ring()
     
     # This request should map to 9991. It will test it, fail, and re-open the circuit.
     resp = await cli.get('/test_path')
