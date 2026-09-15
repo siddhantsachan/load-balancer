@@ -131,27 +131,36 @@ async def handle_request(request):
         async with session.get(f"{backend_url}{request.path}", timeout=3) as backend_resp:
             body = await backend_resp.read()
             async with state_lock:
-                reg = SERVER_REGISTRY[backend_url]
-                if reg["state"] == "HALF_OPEN":
-                    reg["state"] = "CLOSED"
-                    reg["failures"] = 0
-                    reg["is_testing"] = False
+                if backend_url in SERVER_REGISTRY:
+                    reg = SERVER_REGISTRY[backend_url]
+                    if reg["state"] == "HALF_OPEN":
+                        reg["state"] = "CLOSED"
+                        reg["failures"] = 0
+                        reg["is_testing"] = False
+                        router.update_wrr_list()
+                        router.update_hash_ring()
             return web.Response(body=body, status=backend_resp.status)
     except (aiohttp.ClientError, asyncio.TimeoutError):
         async with state_lock:
-            reg = SERVER_REGISTRY[backend_url]
-            reg["failures"] += 1
-            if reg["failures"] >= 3 and reg["state"] == "CLOSED":
-                reg["state"] = "OPEN"
-                reg["retry_at"] = time.time() + 10
-            elif reg["state"] == "HALF_OPEN":
-                reg["state"] = "OPEN"
-                reg["retry_at"] = time.time() + 10
-                reg["is_testing"] = False
+            if backend_url in SERVER_REGISTRY:
+                reg = SERVER_REGISTRY[backend_url]
+                reg["failures"] += 1
+                if reg["failures"] >= 3 and reg["state"] == "CLOSED":
+                    reg["state"] = "OPEN"
+                    reg["retry_at"] = time.time() + 10
+                    router.update_wrr_list()
+                    router.update_hash_ring()
+                elif reg["state"] == "HALF_OPEN":
+                    reg["state"] = "OPEN"
+                    reg["retry_at"] = time.time() + 10
+                    reg["is_testing"] = False
+                    router.update_wrr_list()
+                    router.update_hash_ring()
         return web.Response(status=502, text="Bad Gateway")
     finally:
         async with state_lock:
-            SERVER_REGISTRY[backend_url]["active_connections"] -= 1
+            if backend_url in SERVER_REGISTRY:
+                SERVER_REGISTRY[backend_url]["active_connections"] -= 1
 
 # --- RATE LIMITING MIDDLEWARE ---
 RATE_LIMIT_DB = {}
