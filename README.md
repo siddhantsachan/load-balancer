@@ -11,7 +11,7 @@ This project demonstrates how to build a highly concurrent proxy capable of hand
 - **Weighted Round Robin**: Mathematically flattens traffic distribution across servers based on configurable weights.
 - **Circuit Breaker Pattern**: Isolates failing backends. If a server fails 3 times, it enters an `OPEN` state. After 10 seconds, it enters `HALF_OPEN` and routes exactly ONE test request to safely verify recovery.
 - **Token Bucket Rate Limiting**: Built-in middleware to protect against DDoS, limiting burst traffic per IP address (10 tokens max, refills 1/sec).
-- **Admin API**: Add or remove servers dynamically via authenticated POST/DELETE requests.
+- **Admin API**: Add or remove servers dynamically via authenticated POST/DELETE requests (secured via `x-api-key`, default: `secret-key`, override via `ADMIN_API_KEY` environment variable).
 - **Live Dashboard**: View real-time routing metrics at `/dashboard`.
 
 ## Quick Start
