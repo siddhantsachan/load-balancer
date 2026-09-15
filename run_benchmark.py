@@ -1,5 +1,7 @@
 import subprocess
 import time
+import sys
+import os
 
 def main():
     print("Starting Dummy Servers...")
@@ -8,9 +10,11 @@ def main():
     p3 = subprocess.Popen(["python", "dummy_server.py", "8083"])
     
     print("Starting Load Balancer...")
-    lb = subprocess.Popen(["python", "load_balancer.py"])
+    env = os.environ.copy()
+    env["ALLOW_LOAD_TEST_BYPASS"] = "true"
+    lb_process = subprocess.Popen(["python", "load_balancer.py"], env=env)
     
-    time.sleep(3)
+    time.sleep(2)  # Wait for it to start
     
     print("Running Locust Benchmark...")
     subprocess.run([
@@ -23,7 +27,7 @@ def main():
     p1.terminate()
     p2.terminate()
     p3.terminate()
-    lb.terminate()
+    lb_process.terminate()
 
 if __name__ == "__main__":
     main()

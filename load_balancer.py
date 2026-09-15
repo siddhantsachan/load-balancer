@@ -4,6 +4,7 @@ import aiohttp
 import hashlib
 import time
 import bisect
+import os
 
 # --- CONFIGURATION ---
 MAX_FAILURES = 3
@@ -191,7 +192,7 @@ async def rate_limiter(request, handler):
     if request.path.startswith("/admin") or request.path.startswith("/metrics") or request.path.startswith("/dashboard"): 
         return await handler(request)
         
-    if request.headers.get("X-Load-Test") == "true":
+    if os.environ.get("ALLOW_LOAD_TEST_BYPASS") == "true" and request.headers.get("X-Load-Test") == "true":
         return await handler(request)
     
     ip = request.remote or "unknown"

@@ -42,7 +42,7 @@ Using Locust to stress test the proxy, the asynchronous architecture comfortably
 
 * **Throughput**: ~100 Requests Per Second (RPS)
 * **Median Latency**: 19ms
-* **99th Percentile**: 270ms
+* **99th Percentile**: ~270ms
 
 *(Tested with 50 concurrent users locally proxying active HTTP traffic to 3 backend nodes)*
 
