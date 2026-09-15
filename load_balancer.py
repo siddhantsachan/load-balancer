@@ -106,12 +106,22 @@ async def on_cleanup(app):
 
 if __name__ == "__main__":
     app = web.Application(middlewares=[rate_limiter, api_key_auth])
+    app.router.add_get('/metrics', metrics)
+    app.router.add_get('/dashboard', dashboard)
     app.router.add_post('/admin/servers', add_server)
     app.router.add_delete('/admin/servers', remove_server)
     app.router.add_route('*', '/{tail:.*}', handle_request)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     web.run_app(app, port=8080)
+
+# --- DASHBOARD & METRICS ---
+async def metrics(request):
+    return web.json_response(SERVER_REGISTRY)
+
+async def dashboard(request):
+    with open("dashboard.html", "r") as f:
+        return web.Response(text=f.read(), content_type="text/html")
 
 # --- ADMIN API ---
 async def add_server(request):

@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html><body>
+<h2>Load Balancer Metrics</h2>
+<pre id="data"></pre>
+<script>
+setInterval(() => {
+    fetch('/metrics').then(r => r.json()).then(data => {
+        document.getElementById('data').innerText = JSON.stringify(data, null, 2);
+    });
+}, 1000);
+</script>
+</body></html>
