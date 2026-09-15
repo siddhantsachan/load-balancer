@@ -5,6 +5,18 @@ import hashlib
 import time
 import bisect
 
+# --- CONFIGURATION ---
+MAX_FAILURES = 3
+RETRY_TIMEOUT_SEC = 10
+VIRTUAL_NODES = 100
+RATE_LIMIT_CAPACITY = 10
+RATE_LIMIT_REFILL_RATE = 1.0
+ADMIN_API_KEY = "secret-key"
+LISTEN_PORT = 8080
+HEALTH_CHECK_INTERVAL_SEC = 5
+HEALTH_CHECK_TIMEOUT_SEC = 2
+PROXY_REQUEST_TIMEOUT_SEC = 3
+# ---------------------
 SERVER_REGISTRY = {
     "http://localhost:8081": {"weight": 3, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False},
     "http://localhost:8082": {"weight": 2, "active_connections": 0, "healthy": True, "failures": 0, "state": "CLOSED", "retry_at": 0, "is_testing": False},
@@ -33,7 +45,7 @@ class RoutingAlgorithms:
         self.ring_nodes = {}
         for server, data in SERVER_REGISTRY.items():
             if data["healthy"] and data["state"] != "OPEN":
-                for i in range(100):
+                for i in range(VIRTUAL_NODES):
                     vnode = f"{server}-vnode-{i}"
                     h = int(hashlib.md5(vnode.encode()).hexdigest(), 16)
                     self.hash_ring.append(h)
@@ -67,10 +79,10 @@ CURRENT_ALGO = "consistent_hashing"
 async def health_check_loop(app):
     session = app['session']
     while True:
-        await asyncio.sleep(5)
+        await asyncio.sleep(HEALTH_CHECK_INTERVAL_SEC)
         for server in list(SERVER_REGISTRY.keys()):
             try:
-                async with session.get(f"{server}/health", timeout=2) as response:
+                async with session.get(f"{server}/health", timeout=HEALTH_CHECK_TIMEOUT_SEC) as response:
                     async with state_lock:
                         if response.status == 200 and not SERVER_REGISTRY[server]["healthy"]:
                             SERVER_REGISTRY[server]["healthy"] = True
@@ -128,7 +140,7 @@ async def handle_request(request):
         
     session = request.app['session']
     try:
-        async with session.get(f"{backend_url}{request.path}", timeout=3) as backend_resp:
+        async with session.get(f"{backend_url}{request.path}", timeout=PROXY_REQUEST_TIMEOUT_SEC) as backend_resp:
             body = await backend_resp.read()
             async with state_lock:
                 if backend_url in SERVER_REGISTRY:
@@ -145,14 +157,14 @@ async def handle_request(request):
             if backend_url in SERVER_REGISTRY:
                 reg = SERVER_REGISTRY[backend_url]
                 reg["failures"] += 1
-                if reg["failures"] >= 3 and reg["state"] == "CLOSED":
+                if reg["failures"] >= MAX_FAILURES and reg["state"] == "CLOSED":
                     reg["state"] = "OPEN"
-                    reg["retry_at"] = time.time() + 10
+                    reg["retry_at"] = time.time() + RETRY_TIMEOUT_SEC
                     router.update_wrr_list()
                     router.update_hash_ring()
                 elif reg["state"] == "HALF_OPEN":
                     reg["state"] = "OPEN"
-                    reg["retry_at"] = time.time() + 10
+                    reg["retry_at"] = time.time() + RETRY_TIMEOUT_SEC
                     reg["is_testing"] = False
                     router.update_wrr_list()
                     router.update_hash_ring()
@@ -174,11 +186,11 @@ async def rate_limiter(request, handler):
     now = time.time()
     
     if ip not in RATE_LIMIT_DB:
-        RATE_LIMIT_DB[ip] = [10, now]
+        RATE_LIMIT_DB[ip] = [RATE_LIMIT_CAPACITY, now]
     else:
         tokens, last_refill = RATE_LIMIT_DB[ip]
         elapsed = now - last_refill
-        RATE_LIMIT_DB[ip][0] = min(10, tokens + elapsed)
+        RATE_LIMIT_DB[ip][0] = min(RATE_LIMIT_CAPACITY, tokens + (elapsed * RATE_LIMIT_REFILL_RATE))
         RATE_LIMIT_DB[ip][1] = now
         
     if RATE_LIMIT_DB[ip][0] < 1:
@@ -191,7 +203,7 @@ async def rate_limiter(request, handler):
 @web.middleware
 async def api_key_auth(request, handler):
     if request.path.startswith("/admin"):
-        if request.headers.get("X-API-Key") != "secret-key":
+        if request.headers.get("X-API-Key") != ADMIN_API_KEY:
             return web.Response(status=401, text="Unauthorized")
     return await handler(request)
 
@@ -244,5 +256,5 @@ if __name__ == "__main__":
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     
-    print("Starting async load balancer on port 8080...")
-    web.run_app(app, port=8080)
+    print(f"Starting async load balancer on port {LISTEN_PORT}...")
+    web.run_app(app, port=LISTEN_PORT)
